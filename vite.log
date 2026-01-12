@@ -1,0 +1,12 @@
+
+> ldsaas-invite@0.0.0 dev
+> vite --host
+
+Re-optimizing dependencies because vite config has changed
+Port 5173 is in use, trying another one...
+
+  VITE v5.4.21  ready in 102 ms
+
+  ➜  Local:   http://localhost:5174/
+  ➜  Network: http://192.168.8.80:5174/
+2:31:06 AM [vite] hmr update /src/App.jsx
