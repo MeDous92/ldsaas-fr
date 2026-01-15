@@ -1,10 +1,32 @@
-import { useState, useMemo } from "react";
-import EmployeeFeed from "./EmployeeFeed";
+import { useState, useMemo, useEffect, useRef } from "react";
+import EmployeeDashboard from "./EmployeeDashboard";
 import ManagerDashboard from "./ManagerDashboard";
 import InvitePage from "./InvitePage";
 
 const apiBase = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/+$/, "");
 const TOKEN_KEY = "ldsaas_access_token";
+
+// Interactive Mouse Background Component
+function InteractiveBackground() {
+  const spotlightRef = useRef(null);
+
+  useEffect(() => {
+    function handleMouseMove(e) {
+      if (spotlightRef.current) {
+        spotlightRef.current.style.transform = `translate(${e.clientX}px, ${e.clientY}px) translate(-50%, -50%)`;
+      }
+    }
+    window.addEventListener("mousemove", handleMouseMove);
+    return () => window.removeEventListener("mousemove", handleMouseMove);
+  }, []);
+
+  return (
+    <div className="interactive-bg">
+      <div className="starfield"></div>
+      <div ref={spotlightRef} className="mouse-spotlight"></div>
+    </div>
+  );
+}
 
 function getParam(name) {
   return new URLSearchParams(window.location.search).get(name) || "";
@@ -14,20 +36,79 @@ export default function App() {
   const path = window.location.pathname;
   const isLogin = path === "/login";
   const isInvite = path === "/accept-invite";
-  const isEmployee = path === "/employee" || path === "/home";
-  const isManager = path === "/manager";
-  const isAdmin = path === "/admin";
   const isInvitePage = path === "/invite";
-  const isDefault = !isLogin && !isInvite && !isEmployee && !isManager && !isAdmin && !isInvitePage;
+
+  // Strict Routes
+  const isEmployee = path === "/employee";
+  const isManager = path === "/manager" || path === "/admin";
+
+  // Auth Check Effect
+  useEffect(() => {
+    // Redirect /home or root to proper dashboard if logged in
+    if (path === "/" || path === "/home") {
+      const role = localStorage.getItem("ldsaas_user_role");
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (token && role) {
+        window.location.replace(role === "manager" || role === "admin" ? "/manager" : "/employee");
+      } else if (token) {
+        // Fallback if role missing but token exists (legacy login)
+        fetch(`${apiBase}/api/v1/users/me`, { headers: { Authorization: `Bearer ${token}` } })
+          .then(r => r.json())
+          .then(u => {
+            localStorage.setItem("ldsaas_user_role", u.role.toLowerCase());
+            window.location.replace(u.role === "manager" || u.role === "admin" ? "/manager" : "/employee");
+          }).catch(() => window.location.assign("/login"));
+      } else {
+        window.location.replace("/login");
+      }
+    }
+
+    // RBAC Enforcer
+    const role = localStorage.getItem("ldsaas_user_role");
+    const token = localStorage.getItem(TOKEN_KEY);
+
+    if ((isEmployee || isManager) && !token) {
+      window.location.assign("/login");
+      return;
+    }
+
+    if (token && role) {
+      if (isEmployee && (role === 'manager' || role === 'admin')) {
+        // Manager on employee route -> Redirect to Manager Dashboard
+        window.location.replace("/manager");
+      }
+      if (isManager && role === 'employee') {
+        // Employee on manager route -> Redirect to Employee Dashboard
+        window.location.replace("/employee");
+      }
+    }
+  }, [path, isEmployee, isManager]);
+
+  const isDefault = !isLogin && !isInvite && !isEmployee && !isManager && !isInvitePage;
+
+  // Render Background only for public pages
+  const showBackground = isLogin || isInvite || isDefault;
 
   return (
-    <main className={`page ${isEmployee ? "page--employee" : ""}`}>
-      {(isInvite || isDefault) && <InviteCard />}
-      {isLogin && <LoginCard />}
-      {isEmployee && <EmployeeFeed />}
-      {(isManager || isAdmin) && (
-        <ManagerDashboard />
+    <main className={`page ${!showBackground ? "page--employee" : ""}`}>
+      {showBackground && <InteractiveBackground />}
+
+      {(isInvite || isDefault) && (
+        <div style={{ position: "relative", zIndex: 10, display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <h1 className="glow-text">Welcome to the world of Opportunities!</h1>
+          <InviteCard />
+        </div>
       )}
+
+      {isLogin && (
+        <div style={{ position: "relative", zIndex: 10, display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <h1 className="glow-text">Welcome to the world of Opportunities!</h1>
+          <LoginCard />
+        </div>
+      )}
+
+      {isEmployee && <EmployeeDashboard />}
+      {isManager && <ManagerDashboard />}
       {isInvitePage && <InvitePage />}
     </main>
   );
@@ -48,7 +129,6 @@ function InviteCard() {
     const list = [];
     if (!email) list.push("email");
     if (!token) list.push("token");
-    if (!apiBase) list.push("backend url");
     return list;
   }, [email, token]);
 
@@ -99,7 +179,7 @@ function InviteCard() {
   }
 
   return (
-    <section className="card">
+    <section className="glass-panel">
       <div className="card-header">
         <p className="eyebrow">Invitation</p>
         <h1>Activate your account</h1>
@@ -177,22 +257,12 @@ function LoginCard() {
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
 
-  const canSubmit = !!apiBase && !submitting;
+  const canSubmit = !submitting;
 
   async function onSubmit(e) {
     e.preventDefault();
     setError("");
     setData(null);
-
-    console.log("[Login Debug] Starting login process...");
-    console.log("[Login Debug] API Base:", apiBase);
-
-    if (!apiBase) {
-      const msg = "Missing: backend url (check .env VITE_BACKEND_URL)";
-      console.error("[Login Debug]", msg);
-      setError(msg);
-      return;
-    }
 
     setSubmitting(true);
     try {
@@ -200,21 +270,16 @@ function LoginCard() {
       body.set("username", email);
       body.set("password", password);
 
-      console.log("[Login Debug] Request Body (params):", body.toString());
-
       const res = await fetch(`${apiBase}/api/v1/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body
       });
 
-      console.log("[Login Debug] Response Status:", res.status);
-
       if (!res.ok) {
         let message = `Request failed (${res.status})`;
         try {
           const text = await res.text();
-          console.log("[Login Debug] Error Body (text):", text);
           try {
             const payload = JSON.parse(text);
             if (payload && payload.detail) {
@@ -223,31 +288,27 @@ function LoginCard() {
                 : JSON.stringify(payload.detail);
             }
           } catch (e) {
-            // Not JSON, use text if available or default message
             if (text) message = `Error: ${text.slice(0, 100)}`;
           }
-        } catch (_) {
-          console.error("[Login Debug] Failed to read error body");
-        }
+        } catch (_) { }
         throw new Error(message);
       }
 
       const payload = await res.json();
-      console.log("[Login Debug] Success Payload:", payload);
-
       setData(payload);
       if (payload?.access_token) {
         localStorage.setItem(TOKEN_KEY, payload.access_token);
       }
       if (payload?.user) {
-        // Store user info for personalization
         const name = payload.user.name || payload.user.email || "User";
         localStorage.setItem("ldsaas_user_name", name);
 
         if (payload.user.role) {
           const role = payload.user.role.toLowerCase();
+          localStorage.setItem("ldsaas_user_role", role);
+
           if (role === "employee") {
-            window.location.assign("/home");
+            window.location.assign("/employee");
           } else {
             window.location.assign(`/${role}`);
           }
@@ -262,7 +323,7 @@ function LoginCard() {
   }
 
   return (
-    <section className="card">
+    <section className="glass-panel">
       <div className="card-header">
         <p className="eyebrow">Login</p>
         <h1>Welcome back</h1>
@@ -297,13 +358,6 @@ function LoginCard() {
           <div className="notice success">Logged in as {data.user?.email}</div>
         )}
 
-        {data && (
-          <div className="token">
-            <div className="token-label">Access Token</div>
-            <textarea readOnly value={data.access_token || ""} />
-          </div>
-        )}
-
         <button className="primary" type="submit" disabled={!canSubmit}>
           {submitting ? "Signing in..." : "Sign in"}
         </button>
@@ -311,24 +365,6 @@ function LoginCard() {
           Have an invite? Activate account
         </a>
       </form>
-    </section>
-  );
-}
-
-function RoleCard({ role, message }) {
-  return (
-    <section className="card">
-      <div className="card-header">
-        <p className="eyebrow">{role}</p>
-        <h1>{role} Portal</h1>
-        <p className="subhead">{message}</p>
-      </div>
-      <div className="placeholder">
-        This is a placeholder page for the {role.toLowerCase()} role.
-      </div>
-      <a className="link" href="/login">
-        Back to login
-      </a>
     </section>
   );
 }
